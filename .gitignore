@@ -1,0 +1,16 @@
+.env
+.env.local
+*.secret
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.env.pyc
+.pytest_cache/
+.mypy_cache/
+.idea/
+.vscode/
+*.log
+.DS_Store
+Thumbs.db

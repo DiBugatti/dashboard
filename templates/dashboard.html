@@ -1,0 +1,160 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Дашборд ВМР · МСК</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js" defer></script>
+  <script src="{{ url_for('static', filename='dashboard.js') }}" defer></script>
+</head>
+<body>
+  <div class="bg-grid" aria-hidden="true"></div>
+  <header class="top">
+    <div>
+      <p class="eyebrow">ВМР · УАТ + БП · SQL</p>
+      <h1>Дашборд показателей ВМР</h1>
+    </div>
+    <form id="filters" class="filters" autocomplete="off">
+      <div class="presets" id="presets" role="group" aria-label="Быстрый период">
+        <button type="button" class="preset" data-preset="week">Неделя</button>
+        <button type="button" class="preset active" data-preset="month">Месяц</button>
+        <button type="button" class="preset" data-preset="quarter">Квартал</button>
+        <button type="button" class="preset" data-preset="year">Год</button>
+      </div>
+      <label><span>С</span><input type="date" id="dateFrom" value="{{ default_from }}"></label>
+      <label><span>По</span><input type="date" id="dateTo" value="{{ default_to }}"></label>
+      <button type="submit" class="btn">Обновить</button>
+    </form>
+  </header>
+
+  <p id="status" class="status" role="status">Загрузка…</p>
+  <p id="periodLabel" class="period-label"></p>
+
+  <section class="kpis" id="kpis" hidden>
+    <article class="kpi">
+      <span class="kpi-label">Выработка</span>
+      <strong class="kpi-value" data-kpi="production">0 т</strong>
+      <span class="kpi-caption" data-kpi-cap="production">0 смен за период</span>
+    </article>
+    <article class="kpi">
+      <span class="kpi-label">Вывезено</span>
+      <strong class="kpi-value" data-kpi="shipped">0 т</strong>
+      <span class="kpi-caption" data-kpi-cap="shipped">0 рейсов по весам</span>
+    </article>
+    <article class="kpi">
+      <span class="kpi-label">Продано</span>
+      <strong class="kpi-value" data-kpi="sold">0 ₽</strong>
+      <span class="kpi-caption" data-kpi-cap="sold">0 т за период</span>
+    </article>
+    <article class="kpi">
+      <span class="kpi-label">Усушка</span>
+      <strong class="kpi-value" data-kpi="shrink">0%</strong>
+      <span class="kpi-caption" data-kpi-cap="shrink">тюки − весовая</span>
+    </article>
+  </section>
+
+  <section class="block" id="blockProduction" hidden>
+    <div class="block-head">
+      <h2>Производство <span class="period-tag" data-period></span></h2>
+    </div>
+    <div class="grid-2">
+      <article class="panel">
+        <h3>Выработка по дням (по бригадам)</h3>
+        <p class="empty" id="prodEmpty" hidden>за период данных нет</p>
+        <canvas id="chartProdDays" height="200"></canvas>
+      </article>
+      <article class="panel">
+        <h3>Выработка по цехам</h3>
+        <div class="table-wrap short">
+          <table>
+            <thead><tr><th>Цех</th><th class="num">кг</th><th class="num">доля</th></tr></thead>
+            <tbody id="tbodyWorkshops"></tbody>
+          </table>
+        </div>
+        <p class="note" id="prodNote"></p>
+      </article>
+    </div>
+  </section>
+
+  <section class="block" id="blockShrink" hidden>
+    <div class="block-head">
+      <h2>Усушка <span class="period-tag" data-period></span></h2>
+    </div>
+    <div class="grid-2">
+      <article class="panel">
+        <h3>Потеря веса по рейсам, %</h3>
+        <p class="empty" id="shrinkEmpty" hidden>за период данных нет</p>
+        <canvas id="chartShrinkTrips" height="200"></canvas>
+      </article>
+      <article class="panel">
+        <h3>Усушка по фракциям</h3>
+        <div class="table-wrap short">
+          <table>
+            <thead><tr><th>Фракция</th><th class="num">рейсов</th><th class="num">%</th></tr></thead>
+            <tbody id="tbodyShrinkFrac"></tbody>
+          </table>
+        </div>
+      </article>
+    </div>
+  </section>
+
+  <section class="block" id="blockWarehouse" hidden>
+    <div class="block-head">
+      <h2>Склад <span class="badge">на сегодня · период не влияет</span></h2>
+    </div>
+    <article class="panel">
+      <div class="table-wrap">
+        <table>
+          <thead>
+            <tr>
+              <th>Фракция</th>
+              <th class="num">остаток, кг</th>
+              <th>доля</th>
+              <th class="num">₽/т</th>
+              <th class="num">стоимость, ₽</th>
+            </tr>
+          </thead>
+          <tbody id="tbodyWarehouse"></tbody>
+        </table>
+      </div>
+    </article>
+  </section>
+
+  <section class="block" id="blockPrices" hidden>
+    <div class="block-head">
+      <h2>Цены <span class="badge">индекс, 12 мес.</span></h2>
+    </div>
+    <article class="panel">
+      <p class="empty" id="pricesEmpty" hidden>за период данных нет</p>
+      <canvas id="chartPrices" height="220"></canvas>
+    </article>
+  </section>
+
+  <section class="block" id="blockSales" hidden>
+    <div class="block-head">
+      <h2>Продажи <span class="period-tag" data-period></span></h2>
+    </div>
+    <div id="concWarn" class="warn" hidden></div>
+    <div class="grid-2">
+      <article class="panel">
+        <h3>Выручка по фракциям</h3>
+        <p class="empty" id="salesEmpty" hidden>за период данных нет</p>
+        <canvas id="chartSalesFrac" height="220"></canvas>
+      </article>
+      <article class="panel">
+        <h3>Структура покупателей</h3>
+        <div class="table-wrap short">
+          <table>
+            <thead><tr><th>Контрагент</th><th class="num">₽</th><th class="num">доля</th></tr></thead>
+            <tbody id="tbodyBuyers"></tbody>
+          </table>
+        </div>
+      </article>
+    </div>
+  </section>
+</body>
+</html>
