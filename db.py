@@ -1,4 +1,4 @@
-"""Дашборд ВМР: SQL к msk_uat_copy3 + msk_buh_copy по ТЗ."""
+"""Дашборд ВМР: SQL к msk_uat + msk_buh по ТЗ."""
 
 from __future__ import annotations
 
@@ -13,6 +13,9 @@ import pymssql
 from dotenv import load_dotenv
 
 load_dotenv()
+
+DB_UAT = os.getenv("SQL_DATABASE_UAT", os.getenv("SQL_DATABASE", "msk_uat"))
+DB_BUH = os.getenv("SQL_DATABASE_BUH", "msk_buh")
 
 # цвета фракций — постоянные во всех блоках (п. 9 ТЗ)
 FRACTION_COLORS = {
@@ -46,11 +49,20 @@ def fraction_color(name: str) -> str:
 
 def _cfg() -> dict[str, str]:
     return {
-        "server": os.getenv("SQL_SERVER", "192.168.80.10"),
-        "database": os.getenv("SQL_DATABASE", "msk_uat_copy3"),
+        "uat_server": os.getenv("SQL_SERVER_UAT", os.getenv("SQL_SERVER", "192.168.80.10")),
+        "buh_server": os.getenv("SQL_SERVER_BUH", "192.168.80.5"),
+        "uat_database": DB_UAT,
+        "buh_database": DB_BUH,
         "user": os.getenv("SQL_USER", "user1c"),
         "password": os.getenv("SQL_PASSWORD", ""),
     }
+
+
+def _server_for(database: str) -> str:
+    cfg = _cfg()
+    if database == cfg["buh_database"]:
+        return cfg["buh_server"]
+    return cfg["uat_server"]
 
 
 @contextmanager
@@ -58,11 +70,12 @@ def connect(database: str | None = None) -> Iterator[Any]:
     cfg = _cfg()
     if not cfg["password"]:
         raise RuntimeError("Не задан SQL_PASSWORD в .env")
+    db = database or cfg["uat_database"]
     conn = pymssql.connect(
-        server=cfg["server"],
+        server=_server_for(db),
         user=cfg["user"],
         password=cfg["password"],
-        database=database or cfg["database"],
+        database=db,
         login_timeout=10,
         timeout=90,
         charset="utf8",
@@ -189,7 +202,7 @@ GROUP BY
 
 def fetch_shifts(date_from: date, date_to: date) -> list[dict[str, Any]]:
     d0, d1 = _bounds(date_from, date_to)
-    with connect("msk_uat_copy3") as conn:
+    with connect(DB_UAT) as conn:
         cur = conn.cursor(as_dict=True)
         cur.execute(SHIFTS_QUERY, (d0, d1))
         rows = cur.fetchall() or []
@@ -208,7 +221,7 @@ def fetch_shifts(date_from: date, date_to: date) -> list[dict[str, Any]]:
 
 def fetch_shipments(date_from: date, date_to: date) -> list[dict[str, Any]]:
     d0, d1 = _bounds(date_from, date_to)
-    with connect("msk_uat_copy3") as conn:
+    with connect(DB_UAT) as conn:
         cur = conn.cursor(as_dict=True)
         cur.execute(SHIPMENTS_QUERY, (d0, d1))
         rows = cur.fetchall() or []
@@ -226,7 +239,7 @@ def fetch_shipments(date_from: date, date_to: date) -> list[dict[str, Any]]:
 
 
 def fetch_warehouse() -> list[dict[str, Any]]:
-    with connect("msk_uat_copy3") as conn:
+    with connect(DB_UAT) as conn:
         cur = conn.cursor(as_dict=True)
         cur.execute(WAREHOUSE_QUERY)
         rows = cur.fetchall() or []
@@ -241,7 +254,7 @@ def fetch_warehouse() -> list[dict[str, Any]]:
 
 def fetch_sales(date_from: date, date_to: date) -> list[dict[str, Any]]:
     d0, d1 = _bounds(date_from, date_to)
-    with connect("msk_buh_copy") as conn:
+    with connect(DB_BUH) as conn:
         cur = conn.cursor(as_dict=True)
         cur.execute(SALES_PERIOD_QUERY, (d0, d1))
         rows = cur.fetchall() or []
@@ -266,7 +279,7 @@ def fetch_sales_monthly(months: int = 12) -> list[dict[str, Any]]:
     start = date(today.year, today.month, 1) - timedelta(days=months * 31)
     start = date(start.year, start.month, 1)
     end = date.fromordinal(today.toordinal() + 1)
-    with connect("msk_buh_copy") as conn:
+    with connect(DB_BUH) as conn:
         cur = conn.cursor(as_dict=True)
         cur.execute(SALES_12M_QUERY, (start.isoformat(), end.isoformat()))
         rows = cur.fetchall() or []
