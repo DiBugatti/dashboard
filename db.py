@@ -140,6 +140,7 @@ SHIPMENTS_QUERY = """
 SELECT
   CONVERT(varchar(10), DATEADD(year, -2000, d._Date_Time), 120) AS DocDate,
   CONVERT(nvarchar(20), d._Number) AS DocNumber,
+  CONVERT(nvarchar(20), d._Fld18384) AS VesySoftNumber,
   ISNULL(d._Fld18387, 0) AS BaleWeight,
   ISNULL(d._Fld18389, 0) AS ScaleWeight,
   CONVERT(nvarchar(150), nom._Description) AS Nomenclature,
@@ -152,6 +153,17 @@ WHERE d._Marked = 0x00
   AND DATEADD(year, -2000, d._Date_Time) <  %s
 ORDER BY DATEADD(year, -2000, d._Date_Time), d._Number
 """
+
+
+def vesy_soft_axis_label(raw: str) -> str:
+    """Нижняя подпись оси: числовая часть «Номер документа весы софт» (Ч1-0032062 → 32062)."""
+    s = (raw or "").strip()
+    if not s:
+        return "—"
+    if "-" in s:
+        s = s.rsplit("-", 1)[-1]
+    s = s.lstrip("0") or "0"
+    return s
 
 WAREHOUSE_QUERY = """
 SELECT
@@ -229,6 +241,8 @@ def fetch_shipments(date_from: date, date_to: date) -> list[dict[str, Any]]:
         {
             "date": _serialize(r.get("DocDate")),
             "number": (r.get("DocNumber") or "").strip(),
+            "vesy_soft_number": (r.get("VesySoftNumber") or "").strip(),
+            "label": vesy_soft_axis_label((r.get("VesySoftNumber") or "").strip()),
             "bale_weight": _f(r.get("BaleWeight")),
             "scale_weight": _f(r.get("ScaleWeight")),
             "nomenclature": (r.get("Nomenclature") or "").strip() or "—",
@@ -354,6 +368,8 @@ def _build_shrinkage(ship_rows: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "date": r["date"],
                 "number": r["number"],
+                "vesy_soft_number": r.get("vesy_soft_number") or "",
+                "label": r.get("label") or vesy_soft_axis_label(r.get("vesy_soft_number") or ""),
                 "bale_weight": r["bale_weight"],
                 "scale_weight": r["scale_weight"],
                 "lines": [],
@@ -379,13 +395,14 @@ def _build_shrinkage(ship_rows: list[dict[str, Any]]) -> dict[str, Any]:
             {
                 "date": doc["date"],
                 "number": doc["number"],
+                "vesy_soft_number": doc["vesy_soft_number"],
                 "bale_weight": round(bale, 3),
                 "scale_weight": round(scale, 3),
                 "shrink_kg": round(shrink_kg, 3),
                 "shrink_pct": round(shrink_pct, 2),
                 "mixed": mixed,
                 "anomaly": anomaly,
-                "label": doc["number"],
+                "label": doc["label"],
             }
         )
         if not anomaly and bale > 0:

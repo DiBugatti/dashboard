@@ -179,7 +179,7 @@
     } else {
       empty.hidden = true;
       canvas.hidden = false;
-      const labels = s.trips.map((t) => t.number);
+      const labels = s.trips.map((t) => t.label || t.vesy_soft_number || t.number);
       const values = s.trips.map((t) => t.shrink_pct);
       const colors = s.trips.map((t) =>
         t.anomaly ? "rgba(224,122,106,.55)" : t.mixed ? "rgba(226,180,90,.85)" : "rgba(61,186,122,.85)"
@@ -214,6 +214,10 @@
             legend: { labels: { color: "#8aa396" } },
             tooltip: {
               callbacks: {
+                title: (items) => {
+                  const t = s.trips[items[0].dataIndex];
+                  return t.vesy_soft_number || t.label || t.number;
+                },
                 label: (c) =>
                   c.dataset.type === "line"
                     ? `медиана ${fmt1.format(c.raw)}%`
@@ -222,7 +226,11 @@
             },
           },
           scales: {
-            x: { ticks: { color: "#8aa396", maxRotation: 90, minRotation: 45, autoSkip: true, maxTicksLimit: 20 }, grid: { display: false } },
+            x: {
+              ticks: { color: "#8aa396", maxRotation: 90, minRotation: 45, autoSkip: true, maxTicksLimit: 24 },
+              grid: { display: false },
+              title: { display: true, text: "№ весы софт", color: "#8aa396", font: { size: 11 } },
+            },
             y: { ticks: { color: "#8aa396", callback: (v) => `${v}%` }, grid: { color: "rgba(140,190,160,.08)" } },
           },
         },
