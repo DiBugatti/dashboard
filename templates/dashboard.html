@@ -28,83 +28,71 @@
       <label><span>С</span><input type="date" id="dateFrom" value="{{ default_from }}"></label>
       <label><span>По</span><input type="date" id="dateTo" value="{{ default_to }}"></label>
       <button type="submit" class="btn">Обновить</button>
+      <span class="hint hint--right"><button type="button" class="hint-btn" aria-label="Пояснение к периоду">i</button><span class="hint-text">Период управляет всеми блоками, кроме «Склада»: склад всегда показывает остаток на сегодня.</span></span>
     </form>
   </header>
 
   <p id="status" class="status" role="status">Загрузка…</p>
-  <p id="periodLabel" class="period-label"></p>
 
   <section class="kpis" id="kpis" hidden>
     <article class="kpi">
       <span class="kpi-label">Выработка</span>
+      <span class="hint hint--right"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Сколько вторсырья отсортировали за выбранный период. Складываем вес всех строк в документах «Смена». Сюда входит и россыпь: её вес система сама добавляет в смены в момент выезда машины и делит поровну между двумя бригадами. Внизу — сколько смен отработали бригады за период. Смены с бирками БПВ и ББА не считаем: это автоматические смены под россыпь, бригада в них не работала.</span></span>
       <strong class="kpi-value" data-kpi="production">0 т</strong>
       <span class="kpi-caption" data-kpi-cap="production">0 смен за период</span>
     </article>
     <article class="kpi">
       <span class="kpi-label">Вывезено</span>
+      <span class="hint hint--right"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Сколько тонн увезли с площадки за период — по весам, а не по биркам. Внизу — число рейсов: один рейс это одна отгрузка.</span></span>
       <strong class="kpi-value" data-kpi="shipped">0 т</strong>
       <span class="kpi-caption" data-kpi-cap="shipped">0 рейсов по весам</span>
     </article>
     <article class="kpi">
       <span class="kpi-label">Продано</span>
+      <span class="hint hint--right"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">На какую сумму продали вторсырьё за период по документам реализации в бухгалтерии и сколько это тонн. С «Вывезено» может не сходиться: реализацию оформляют позже, чем вывозят.</span></span>
       <strong class="kpi-value" data-kpi="sold">0 ₽</strong>
       <span class="kpi-caption" data-kpi-cap="sold">0 т за период</span>
     </article>
     <article class="kpi">
       <span class="kpi-label">Усушка</span>
+      <span class="hint hint--right"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Сколько веса потеряли тюки между складом и весовой. Коэффициент рейса — вес по весам, делённый на вес тюков по биркам. Если в машине несколько фракций, тот же коэффициент применяем к весу каждой: потеря фракции — вес её тюков минус её вес по весам. В рублях — грубая оценка: потерянные тонны умножаем на среднюю цену проданного за период. Отгрузки без номера весов и с нулевым весом не берём. Россыпь в расчёте остаётся: у неё вес бирок равен весу по весам, усушка 0%.</span></span>
       <strong class="kpi-value" data-kpi="shrink">0%</strong>
       <span class="kpi-caption" data-kpi-cap="shrink">тюки − весовая</span>
     </article>
   </section>
 
-  <section class="block" id="blockProduction" hidden>
+  <section class="block" id="blockSelection" hidden>
     <div class="block-head">
-      <h2>Производство <span class="period-tag" data-period></span></h2>
+      <h2>Процент отбора <span class="period-tag" data-period></span>
+        <span class="hint"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Сколько мусора приехало на МСК и сколько из него отобрали во вторсырьё. Приехавшее — нетто ТКО из регистра взвешиваний. Отобранное — итоговое количество по документам «Смена». Процент — отобранное делим на приехавшее. Столбик за каждый день — этот процент. Наведите на столбик — увидите обе величины в тоннах.</span></span>
+      </h2>
     </div>
-    <div class="grid-2">
-      <article class="panel">
-        <h3>Выработка по дням (по бригадам)</h3>
-        <p class="empty" id="prodEmpty" hidden>за период данных нет</p>
-        <canvas id="chartProdDays" height="200"></canvas>
-      </article>
-      <article class="panel">
-        <h3>Выработка по цехам</h3>
-        <div class="table-wrap short">
-          <table>
-            <thead><tr><th>Цех</th><th class="num">кг</th><th class="num">доля</th></tr></thead>
-            <tbody id="tbodyWorkshops"></tbody>
-          </table>
+    <article class="panel">
+      <div class="pick-stats">
+        <div>
+          <span class="kpi-label">Приехало ТКО</span>
+          <strong class="kpi-value" id="pickArrived">0 т</strong>
         </div>
-        <p class="note" id="prodNote"></p>
-      </article>
-    </div>
+        <div>
+          <span class="kpi-label">Отобрано</span>
+          <strong class="kpi-value" id="pickSelected">0 т</strong>
+        </div>
+        <div>
+          <span class="kpi-label">Процент отбора</span>
+          <strong class="kpi-value" id="pickPct">0%</strong>
+        </div>
+      </div>
+      <p class="empty" id="pickEmpty" hidden>за период данных нет</p>
+      <div class="chart-box-md"><canvas id="chartSelection"></canvas></div>
+    </article>
   </section>
 
-  <section class="block" id="blockShrink" hidden>
-    <div class="block-head">
-      <h2>Усушка <span class="period-tag" data-period></span></h2>
-    </div>
-    <div class="grid-2">
-      <article class="panel">
-        <h3>Потеря веса по рейсам, %</h3>
-        <p class="empty" id="shrinkEmpty" hidden>за период данных нет</p>
-        <canvas id="chartShrinkTrips" height="200"></canvas>
-      </article>
-      <article class="panel">
-        <h3>Усушка по фракциям</h3>
-        <div class="table-wrap short">
-          <table>
-            <thead><tr><th>Фракция</th><th class="num">рейсов</th><th class="num">%</th></tr></thead>
-            <tbody id="tbodyShrinkFrac"></tbody>
-          </table>
-        </div>
-      </article>
-    </div>
-  </section>
-
+  <div class="mid-row">
   <section class="block" id="blockWarehouse" hidden>
     <div class="block-head">
-      <h2>Склад <span class="badge">на сегодня · период не влияет</span></h2>
+      <h2>Склад <span class="badge">на сегодня · период не влияет</span>
+        <span class="hint"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Что лежит на площадке в тюках прямо сейчас. Фильтр периода на этот блок не влияет. Цена за тонну — из последней проведённой реализации этой фракции: сумма её строк в том документе делится на количество. Выбранный период на цену не влияет. Там, где цена 0, фракция пока не сопоставлена с номенклатурой бухгалтерии, поэтому стоимость склада занижена.</span></span>
+      </h2>
     </div>
     <article class="panel">
       <div class="table-wrap">
@@ -124,13 +112,67 @@
     </article>
   </section>
 
+  <section class="block" id="blockProduction" hidden>
+    <div class="block-head">
+      <h2>Производство <span class="period-tag" data-period></span></h2>
+    </div>
+    <article class="panel">
+        <h3>Выработка по бригадам
+          <span class="hint"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Сколько отсортировала каждая бригада за выбранный период. Наведите на столбик — увидите вес и число смен. Россыпь здесь не учитываем: её вес система делит между бригадами поровну, работу бригад он не отражает. Поэтому сумма двух столбиков меньше плитки «Выработка».</span></span>
+        </h3>
+        <p class="empty" id="prodEmpty" hidden>за период данных нет</p>
+        <div class="chart-box-sm"><canvas id="chartProdDays"></canvas></div>
+    </article>
+    <article class="panel">
+        <h3>Выработка по цехам
+          <span class="hint hint--right"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Как выработка за период разделилась между цехами: килограммы и доля в процентах. Итог совпадает с плиткой «Выработка». Здесь, в отличие от графика по бригадам, россыпь учтена.</span></span>
+        </h3>
+        <div class="table-wrap short">
+          <table>
+            <thead><tr><th>Цех</th><th class="num">кг</th><th class="num">доля</th></tr></thead>
+            <tbody id="tbodyWorkshops"></tbody>
+          </table>
+        </div>
+        <p class="note" id="prodNote"></p>
+    </article>
+  </section>
+  </div>
+
+  <section class="block" id="blockShrink" hidden>
+    <div class="block-head">
+      <h2>Усушка <span class="period-tag" data-period></span></h2>
+    </div>
+    <div class="grid-2">
+      <article class="panel">
+        <h3>Потеря веса по рейсам, %
+          <span class="hint"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Каждый столбик — один рейс: вес тюков минус вес по весам, в процентах от веса тюков. Столбик вниз означает, что на весах оказалось больше, чем по биркам. Внизу — дата рейса, линия сетки отделяет один день от другого. Наведите на столбик — увидите потерю в килограммах, вес тюков на складе, вес по весам на выезде, номер документа в программе весов, машину и фракции рейса. Шкала ограничена ±30%: редкие выбросы уходят за край, их точное значение видно при наведении.</span></span>
+        </h3>
+        <p class="empty" id="shrinkEmpty" hidden>за период данных нет</p>
+        <div class="chart-fill"><canvas id="chartShrinkTrips"></canvas></div>
+      </article>
+      <article class="panel">
+        <h3>Усушка по фракциям
+          <span class="hint hint--right"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Сколько веса потеряла каждая фракция за период и какой это процент от веса её тюков. Если в рейсе ехали тюки нескольких фракций, потерю делим между ними по весу, поэтому в столбце «Рейсов» бывают дробные числа.</span></span>
+        </h3>
+        <div class="table-wrap short">
+          <table>
+            <thead><tr><th>Фракция</th><th class="num">рейсов</th><th class="num">%</th></tr></thead>
+            <tbody id="tbodyShrinkFrac"></tbody>
+          </table>
+        </div>
+      </article>
+    </div>
+  </section>
+
   <section class="block" id="blockPrices" hidden>
     <div class="block-head">
-      <h2>Цены <span class="badge">индекс, 12 мес.</span></h2>
+      <h2>Цены <span class="badge">% к первому месяцу, 12 мес.</span>
+        <span class="hint"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Как менялись цены продажи за последние 12 месяцев по всем фракциям из продаж за выбранный период. Показываем изменение в процентах к первому месяцу, в котором фракцию продавали. Цена месяца средняя: выручку за месяц делим на проданные тонны. Наведите на точку — увидите цену в рублях за тонну.</span></span>
+      </h2>
     </div>
     <article class="panel">
       <p class="empty" id="pricesEmpty" hidden>за период данных нет</p>
-      <canvas id="chartPrices" height="220"></canvas>
+      <div class="chart-box"><canvas id="chartPrices"></canvas></div>
     </article>
   </section>
 
@@ -141,12 +183,16 @@
     <div id="concWarn" class="warn" hidden></div>
     <div class="grid-2">
       <article class="panel">
-        <h3>Выручка по фракциям</h3>
+        <h3>Выручка по фракциям
+          <span class="hint"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Сколько денег принесла каждая фракция за период. Названия — номенклатура УАТ: реализация из бухгалтерии сопоставлена через вид груза. Длина полосы — рубли. Наведите — увидите сумму и тонны.</span></span>
+        </h3>
         <p class="empty" id="salesEmpty" hidden>за период данных нет</p>
-        <canvas id="chartSalesFrac" height="220"></canvas>
+        <div class="chart-fill"><canvas id="chartSalesFrac"></canvas></div>
       </article>
       <article class="panel">
-        <h3>Структура покупателей</h3>
+        <h3>Структура покупателей
+          <span class="hint hint--right"><button type="button" class="hint-btn" aria-label="Пояснение">i</button><span class="hint-text">Кто покупал за период, на какую сумму и какую долю выручки занимает. Видно, насколько площадка зависит от одного покупателя.</span></span>
+        </h3>
         <div class="table-wrap short">
           <table>
             <thead><tr><th>Контрагент</th><th class="num">₽</th><th class="num">доля</th></tr></thead>
@@ -156,5 +202,6 @@
       </article>
     </div>
   </section>
+
 </body>
 </html>

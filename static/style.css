@@ -160,6 +160,7 @@ h1 {
 }
 
 .kpi {
+  position: relative;
   background: var(--panel);
   border: 1px solid var(--line);
   border-radius: var(--radius);
@@ -383,5 +384,141 @@ tr.hot td { color: var(--danger); }
 }
 
 @media (max-width: 640px) {
-  .kpis, .charts, .grid-2 { grid-template-columns: 1fr; }
+  .kpis, .charts, .grid-2, .pick-stats { grid-template-columns: 1fr; }
 }
+
+/* --- подсказки «i» --- */
+.hint {
+  position: relative;
+  display: inline-flex;
+  vertical-align: middle;
+  margin-left: 6px;
+}
+
+.kpi .hint {
+  position: absolute;
+  top: 14px;
+  right: 14px;
+  margin: 0;
+}
+
+.hint-btn {
+  width: 18px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 50%;
+  background: rgba(140, 190, 160, 0.08);
+  color: var(--muted);
+  font: 600 11px/1 var(--font);
+  cursor: help;
+}
+
+.hint-btn:hover,
+.hint-btn:focus-visible {
+  color: var(--text);
+  border-color: var(--accent);
+}
+
+.hint-text {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 8px);
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: min(360px, 78vw);
+  padding: 10px 12px;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--bg-2);
+  box-shadow: var(--shadow);
+  color: var(--text);
+  font-size: 13px;
+  font-weight: 400;
+  line-height: 1.45;
+  text-align: left;
+  white-space: normal;
+  display: none;
+}
+
+.hint--right .hint-text {
+  left: auto;
+  right: 0;
+  transform: none;
+}
+
+.hint:hover .hint-text,
+.hint:focus-within .hint-text {
+  display: block;
+}
+
+/* --- высота графика цен --- */
+.chart-box {
+  position: relative;
+  height: 400px;
+}
+
+/* панель не должна растягивать колонку сетки под ширину таблицы */
+.grid-2 > .panel { min-width: 0; }
+
+
+
+
+/* невысокий график — вровень с соседней таблицей */
+.chart-box-sm {
+  position: relative;
+  height: 190px;
+}
+
+.chart-box-md {
+  position: relative;
+  height: 300px;
+}
+
+.pick-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 8px;
+}
+
+/* --- средняя строка: склад слева, выработка справа --- */
+.mid-row {
+  display: grid;
+  grid-template-columns: 1.2fr 1fr;
+  gap: 14px;
+  align-items: start;
+}
+
+.mid-row > * { min-width: 0; }
+.mid-row .table-wrap { overflow-x: auto; }
+
+#blockProduction .panel + .panel { margin-top: 14px; }
+
+@media (max-width: 900px) {
+  .mid-row { grid-template-columns: 1fr; }
+}
+
+/* таблица рядом с графиком тянется до низа панели */
+#blockShrink .panel,
+#blockSales .panel {
+  display: flex;
+  flex-direction: column;
+}
+
+#blockShrink .table-wrap.short,
+#blockSales .table-wrap.short {
+  max-height: none;
+  flex: 1;
+}
+
+/* график занимает всю высоту панели, как соседняя таблица */
+.chart-fill {
+  position: relative;
+  flex: 1;
+  min-height: 260px;
+}
+
+/* заголовки: цвет задаём явно, чтобы его не перебивали чужие стили браузера */
+h1, h2, h3 { color: var(--text); }

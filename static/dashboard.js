@@ -4,7 +4,6 @@
   const dateTo = document.getElementById("dateTo");
   const presetsEl = document.getElementById("presets");
   const status = document.getElementById("status");
-  const periodLabel = document.getElementById("periodLabel");
   const btn = form.querySelector("button.btn");
 
   const charts = {};
@@ -16,6 +15,7 @@
   function setStatus(text, isError = false) {
     status.textContent = text;
     status.classList.toggle("error", isError);
+    status.hidden = !text; // при успешной загрузке строка не занимает место
   }
 
   function iso(d) {
@@ -27,6 +27,43 @@
 
   function formatRu(isoDate) {
     return new Date(isoDate + "T00:00:00").toLocaleDateString("ru-RU");
+  }
+
+  const MONTHS_DATIVE = [
+    "январю", "февралю", "марту", "апрелю", "маю", "июню",
+    "июлю", "августу", "сентябрю", "октябрю", "ноябрю", "декабрю",
+  ];
+
+  // «2025-10» → «октябрю 2025» — для подписи «+14% к октябрю 2025»
+  function monthRu(monthKey) {
+    if (!monthKey) return "первому месяцу";
+    const [y, m] = monthKey.split("-");
+    return `${MONTHS_DATIVE[Number(m) - 1] || monthKey} ${y}`;
+  }
+
+  const MONTHS_SHORT = [
+    "янв", "фев", "мар", "апр", "май", "июн",
+    "июл", "авг", "сен", "окт", "ноя", "дек",
+  ];
+
+  // «2025-10» → «окт 2025» — подпись оси
+  function monthShort(monthKey) {
+    const [y, m] = (monthKey || "").split("-");
+    return MONTHS_SHORT[Number(m) - 1] ? `${MONTHS_SHORT[Number(m) - 1]} ${y}` : monthKey;
+  }
+
+  // «2026-09-01» → «01.09» — подпись оси
+  function dayShort(isoDate) {
+    const [, m, d] = (isoDate || "").split("-");
+    return m && d ? `${d}.${m}` : isoDate;
+  }
+
+  function plural(n, one, few, many) {
+    const n10 = n % 10;
+    const n100 = n % 100;
+    if (n10 === 1 && n100 !== 11) return one;
+    if (n10 >= 2 && n10 <= 4 && (n100 < 12 || n100 > 14)) return few;
+    return many;
   }
 
   function rangeForPreset(preset, anchor = new Date()) {
@@ -81,11 +118,23 @@
     }
   }
 
-  function paintKpis(k) {
+  // Смены с бирками БПВ и ББА — автоматические под россыпь, в число смен не входят.
+  const AUTO_SHIFT_TAGS = new Set(["БПВ", "ББА"]);
+
+  function realShiftCount(rows) {
+    const docs = new Set();
+    rows.forEach((r) => {
+      if (!AUTO_SHIFT_TAGS.has((r.tag || "").trim())) docs.add(`${r.date}|${r.number}`);
+    });
+    return docs.size;
+  }
+
+  function paintKpis(k, rows) {
     document.getElementById("kpis").hidden = false;
     document.querySelector('[data-kpi="production"]').textContent = `${fmt1.format(k.production_t)} т`;
+    const shifts = rows && rows.length ? realShiftCount(rows) : k.shift_count;
     document.querySelector('[data-kpi-cap="production"]').textContent =
-      `${fmt0.format(k.shift_count)} смен за период`;
+      `${fmt0.format(shifts)} ${plural(shifts, "смена", "смены", "смен")} за период`;
     document.querySelector('[data-kpi="shipped"]').textContent = `${fmt1.format(k.shipped_t)} т`;
     document.querySelector('[data-kpi-cap="shipped"]').textContent =
       `${fmt0.format(k.trip_count)} рейсов по весам`;
@@ -100,7 +149,95 @@
       ` ≈ ${money(k.shrink_rub || 0)}`;
   }
 
-  function paintProduction(p, period) {
+  // Временный список россыпных фракций: в 1С у фракции есть признак «хранится россыпью»,
+  // когда его отдадут в API — брать оттуда, а не по названию.
+  const BULK_FRACTIONS = new Set(["Стекло", "Макулатура", "Металл", "Перо"]);
+
+  // Выработка бригад за период без россыпи: её вес делится между бригадами поровну
+  function brigadeTotals(rows) {
+    const by = new Map();
+    rows.forEach((r) => {
+      if (BULK_FRACTIONS.has(r.nomenclature)) return;
+      const cur = by.get(r.brigade) || { kg: 0, shifts: new Set() };
+      cur.kg += r.quantity;
+      cur.shifts.add(`${r.date}|${r.number}`);
+      by.set(r.brigade, cur);
+    });
+    return [...by.entries()]
+      .map(([name, v]) => ({ name, kg: v.kg, shifts: v.shifts.size }))
+      .sort((a, b) => b.kg - a.kg);
+  }
+
+  function paintSelection(s, period) {
+    const block = document.getElementById("blockSelection");
+    block.hidden = false;
+    block.querySelectorAll("[data-period]").forEach((el) => {
+      el.textContent = period;
+    });
+    const days = (s && s.days) || [];
+    const has = days.some((d) => d.arrived_kg || d.selected_kg);
+    document.getElementById("pickArrived").textContent = `${fmt1.format(s.arrived_t || 0)} т`;
+    document.getElementById("pickSelected").textContent = `${fmt1.format(s.selected_t || 0)} т`;
+    document.getElementById("pickPct").textContent =
+      s.pct == null ? "—" : `${fmt1.format(s.pct)}%`;
+
+    const empty = document.getElementById("pickEmpty");
+    const canvas = document.getElementById("chartSelection");
+    destroyChart("selection");
+    if (!has) {
+      empty.hidden = false;
+      canvas.parentElement.hidden = true;
+      return;
+    }
+    empty.hidden = true;
+    canvas.parentElement.hidden = false;
+    charts.selection = new Chart(canvas, {
+      type: "bar",
+      data: {
+        labels: days.map((d) => dayShort(d.date)),
+        datasets: [
+          {
+            data: days.map((d) => d.pct),
+            backgroundColor: "#3dba7a",
+            borderRadius: 4,
+            barPercentage: 0.72,
+          },
+        ],
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            titleFont: { size: 14 },
+            callbacks: {
+              title: (items) => formatRu(days[items[0].dataIndex].date),
+              label: (c) => {
+                const d = days[c.dataIndex];
+                const pct = d.pct == null ? "—" : `${fmt1.format(d.pct)}%`;
+                return [
+                  `Приехало ${fmt1.format(d.arrived_kg / 1000)} т`,
+                  `Отобрано ${fmt1.format(d.selected_kg / 1000)} т`,
+                  `Процент отбора ${pct}`,
+                ];
+              },
+            },
+          },
+        },
+        scales: {
+          x: { ticks: { color: "#8aa396", maxRotation: 0, autoSkip: true }, grid: { display: false } },
+          y: {
+            ticks: { color: "#8aa396", callback: (v) => `${fmt1.format(v)}%` },
+            grid: { color: "rgba(140,190,160,.08)" },
+            title: { display: true, text: "процент отбора", color: "#8aa396" },
+          },
+        },
+      },
+    });
+  }
+
+  function paintProduction(p, period, rows) {
     const block = document.getElementById("blockProduction");
     block.hidden = false;
     block.querySelectorAll("[data-period]").forEach((el) => {
@@ -111,38 +248,51 @@
     const empty = document.getElementById("prodEmpty");
     const canvas = document.getElementById("chartProdDays");
     destroyChart("prod");
-    if (!p.days.length) {
+    const totals = brigadeTotals(rows);
+    if (!totals.length) {
       empty.hidden = false;
       canvas.hidden = true;
     } else {
       empty.hidden = true;
       canvas.hidden = false;
+      const colorOf = (name) => (p.brigades.find((b) => b.name === name) || {}).color || "#3dba7a";
       charts.prod = new Chart(canvas, {
         type: "bar",
         data: {
-          labels: p.days,
-          datasets: p.brigades.map((b) => ({
-            label: b.name,
-            data: b.values,
-            backgroundColor: b.color,
-            stack: "s",
-            borderRadius: 4,
-          })),
+          labels: totals.map((t) => t.name),
+          datasets: [
+            {
+              data: totals.map((t) => t.kg),
+              backgroundColor: totals.map((t) => colorOf(t.name)),
+              borderRadius: 6,
+              barPercentage: 0.6,
+            },
+          ],
         },
         options: {
+          indexAxis: "y",
           responsive: true,
+          maintainAspectRatio: false,
           plugins: {
-            legend: { labels: { color: "#8aa396" } },
-            tooltip: { callbacks: { label: (c) => `${c.dataset.label}: ${fmt.format(c.raw)} кг` } },
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: (c) => {
+                  const t = totals[c.dataIndex];
+                  return `${fmt.format(t.kg)} кг · ${t.shifts} ${plural(t.shifts, "смена", "смены", "смен")}`;
+                },
+              },
+            },
           },
           scales: {
-            x: { stacked: true, ticks: { color: "#8aa396" }, grid: { color: "rgba(140,190,160,.08)" } },
-            y: { stacked: true, ticks: { color: "#8aa396", callback: (v) => fmt0.format(v) }, grid: { color: "rgba(140,190,160,.08)" } },
+            x: { ticks: { color: "#8aa396", callback: (v) => fmt0.format(v) }, grid: { color: "rgba(140,190,160,.08)" } },
+            y: { ticks: { color: "#8aa396" }, grid: { display: false } },
           },
         },
       });
     }
 
+    const shiftCount = rows && rows.length ? realShiftCount(rows) : p.shift_count;
     const tb = document.getElementById("tbodyWorkshops");
     if (!p.workshops.length) {
       tb.innerHTML = `<tr><td colspan="3">за период данных нет</td></tr>`;
@@ -158,7 +308,7 @@
         .join("");
       tb.innerHTML =
         rows +
-        `<tr class="total"><td>Итого · ${fmt0.format(p.shift_count)} смен</td>
+        `<tr class="total"><td>Итого · ${fmt0.format(shiftCount)} ${plural(shiftCount, "смена", "смены", "смен")}</td>
          <td class="num">${fmt.format(p.total_kg)}</td><td class="num">100%</td></tr>`;
     }
   }
@@ -179,7 +329,14 @@
     } else {
       empty.hidden = true;
       canvas.hidden = false;
-      const labels = s.trips.map((t) => t.label || t.vesy_soft_number || t.number);
+      // по оси — дата рейса; повтор в тот же день не печатаем, порядок сохраняется
+      let prevDay = "";
+      const labels = s.trips.map((t) => {
+        const day = dayShort(t.date);
+        if (day === prevDay) return "";
+        prevDay = day;
+        return day;
+      });
       const values = s.trips.map((t) => t.shrink_pct);
       const colors = s.trips.map((t) =>
         t.anomaly ? "rgba(224,122,106,.55)" : t.mixed ? "rgba(226,180,90,.85)" : "rgba(61,186,122,.85)"
@@ -209,29 +366,76 @@
           ],
         },
         options: {
+          maintainAspectRatio: false,
           responsive: true,
           plugins: {
-            legend: { labels: { color: "#8aa396" } },
+            legend: {
+              onClick: () => {},
+              labels: {
+                color: "#8aa396",
+                boxWidth: 12,
+                generateLabels: () => [
+                  { text: "обычный рейс", fillStyle: "rgba(61,186,122,.85)", strokeStyle: "rgba(61,186,122,.85)", lineWidth: 0 },
+                  { text: "несколько фракций", fillStyle: "rgba(226,180,90,.85)", strokeStyle: "#e2b45a", lineWidth: 2 },
+                  { text: "расхождение больше 15%", fillStyle: "rgba(224,122,106,.55)", strokeStyle: "rgba(224,122,106,.55)", lineWidth: 0 },
+                  {
+                    text: `медиана ${fmt1.format(s.median_pct)}%`,
+                    fillStyle: "transparent",
+                    strokeStyle: "#e2b45a",
+                    lineWidth: 2,
+                    lineDash: [6, 4],
+                  },
+                ],
+              },
+            },
             tooltip: {
               callbacks: {
                 title: (items) => {
                   const t = s.trips[items[0].dataIndex];
-                  return t.vesy_soft_number || t.label || t.number;
+                  return `${formatRu(t.date)} · отгрузка №${Number(t.number) || t.number}`;
                 },
-                label: (c) =>
-                  c.dataset.type === "line"
-                    ? `медиана ${fmt1.format(c.raw)}%`
-                    : `${fmt1.format(c.raw)}% (${fmt0.format(s.trips[c.dataIndex].shrink_kg)} кг)`,
+                label: (c) => {
+                  if (c.dataset.type === "line") return `медиана ${fmt1.format(c.raw)}%`;
+                  const t = s.trips[c.dataIndex];
+                  const out = [
+                    `Потеря: ${fmt1.format(t.shrink_pct)}% (${fmt0.format(t.shrink_kg)} кг)`,
+                    `Тюки на складе: ${fmt0.format(t.bale_weight)} кг`,
+                    `По весам на выезде: ${fmt0.format(t.scale_weight)} кг`,
+                    `№ весы софт: ${t.vesy_soft_number || "—"}`,
+                  ];
+                  if (t.vehicle) out.push(`Машина: ${t.vehicle}`);
+                  if (t.fractions && t.fractions.length) {
+                    t.fractions.forEach((f) => {
+                      const scale = f.scale_kg != null ? f.scale_kg : f.kg;
+                      const loss = f.shrink_kg != null ? f.shrink_kg : 0;
+                      out.push(
+                        `${f.name}: бирки ${fmt0.format(f.kg)} кг, по весам ${fmt0.format(scale)} кг, потеря ${fmt0.format(loss)} кг`
+                      );
+                    });
+                  }
+                  return out;
+                },
               },
             },
           },
           scales: {
             x: {
-              ticks: { color: "#8aa396", maxRotation: 90, minRotation: 45, autoSkip: true, maxTicksLimit: 24 },
-              grid: { display: false },
-              title: { display: true, text: "№ весы софт", color: "#8aa396", font: { size: 11 } },
+              ticks: { color: "#8aa396", maxRotation: 60, minRotation: 45, autoSkip: false },
+              // вертикальная линия там, где начинается новый день
+              grid: {
+                display: true,
+                drawOnChartArea: true,
+                offset: true,
+                color: (ctx) => (labels[ctx.index] ? "rgba(140,190,160,.22)" : "transparent"),
+              },
             },
-            y: { ticks: { color: "#8aa396", callback: (v) => `${v}%` }, grid: { color: "rgba(140,190,160,.08)" } },
+            // рамка ±30%: редкие выбросы уходят за край, чтобы не прижимать обычные рейсы
+            y: {
+              min: -30,
+              max: 30,
+              ticks: { color: "#8aa396", callback: (v) => `${v}%` },
+              grid: { color: "rgba(140,190,160,.08)" },
+            },
           },
         },
       });
@@ -294,37 +498,53 @@
     }
     empty.hidden = true;
     canvas.hidden = false;
+    let multiPoint = false;
+    const pctLabel = (index) => (index == null ? "—" : `${index - 100 >= 0 ? "+" : "−"}${fmt1.format(Math.abs(index - 100))}%`);
+
     charts.prices = new Chart(canvas, {
       type: "line",
       data: {
-        labels: p.months,
+        labels: p.months.map(monthShort),
         datasets: p.series.map((s) => ({
-          label: `${s.name}${s.last_index != null ? ` · ${s.last_index}` : ""}`,
+          label: s.name,
           data: s.indexes,
           borderColor: s.color,
           backgroundColor: s.color,
-          tension: 0.25,
+          tension: 0,
           spanGaps: true,
           pointRadius: 3,
         })),
       },
       options: {
         responsive: true,
+        maintainAspectRatio: false,
         plugins: {
-          legend: { labels: { color: "#8aa396" } },
+          legend: { labels: { color: "#8aa396", boxWidth: 12, padding: 12 } },
           tooltip: {
+            titleFont: { size: 14 },
             callbacks: {
+              title: (items) => {
+                multiPoint = items.length > 1;
+                return multiPoint
+                  ? monthShort(p.months[items[0].dataIndex])
+                  : p.series[items[0].datasetIndex].name;
+              },
               label: (c) => {
                 const s = p.series[c.datasetIndex];
                 const price = s.prices[c.dataIndex];
-                return `${s.name}: индекс ${c.raw}, ${price != null ? fmt0.format(price) + " ₽/т" : "—"}`;
+                const text = `${price != null ? fmt0.format(price) + " ₽/т" : "—"} · ${pctLabel(c.raw)}`;
+                return multiPoint ? `${s.name}: ${text}` : text;
               },
             },
           },
         },
         scales: {
           x: { ticks: { color: "#8aa396" }, grid: { color: "rgba(140,190,160,.08)" } },
-          y: { ticks: { color: "#8aa396" }, grid: { color: "rgba(140,190,160,.08)" }, title: { display: true, text: "индекс", color: "#8aa396" } },
+          y: {
+            ticks: { color: "#8aa396", callback: (v) => pctLabel(v) },
+            grid: { color: "rgba(140,190,160,.08)" },
+            title: { display: true, text: "изменение цены к первому месяцу", color: "#8aa396" },
+          },
         },
       },
     });
@@ -368,6 +588,7 @@
           ],
         },
         options: {
+        maintainAspectRatio: false,
           indexAxis: "y",
           responsive: true,
           plugins: {
@@ -415,7 +636,6 @@
     }
     const period = `${presetName(activePreset)}: ${formatRu(from)} — ${formatRu(to)}`;
     setStatus(`Загрузка ${period}…`);
-    periodLabel.textContent = period;
     btn.disabled = true;
 
     try {
@@ -423,19 +643,17 @@
       const data = await res.json();
       if (!data.ok) throw new Error(data.error || "Ошибка API");
 
-      paintKpis(data.kpis);
-      paintProduction(data.production, period);
+      paintKpis(data.kpis, data.rows || []);
+      paintSelection(data.selection || {}, period);
+      paintProduction(data.production, period, data.rows || []);
       paintShrink(data.shrinkage, period);
       paintWarehouse(data.warehouse);
       paintPrices(data.prices);
       paintSales(data.sales, period);
 
-      setStatus(
-        `Выработка ${fmt1.format(data.kpis.production_t)} т · вывезено ${fmt1.format(data.kpis.shipped_t)} т · ` +
-          `усушка ${fmt1.format(data.kpis.shrink_pct)}%`
-      );
+      setStatus("");
     } catch (err) {
-      ["kpis", "blockProduction", "blockShrink", "blockWarehouse", "blockPrices", "blockSales"].forEach(
+      ["kpis", "blockSelection", "blockProduction", "blockShrink", "blockWarehouse", "blockPrices", "blockSales"].forEach(
         (id) => {
           const el = document.getElementById(id);
           if (el) el.hidden = true;
