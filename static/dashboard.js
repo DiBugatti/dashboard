@@ -191,6 +191,12 @@
     }
     empty.hidden = true;
     canvas.parentElement.hidden = false;
+    const pcts = days.map((d) => d.pct).filter((v) => v != null);
+    pcts.sort((a, b) => a - b);
+    const mid = Math.floor(pcts.length / 2);
+    const medianPct = pcts.length
+      ? (pcts.length % 2 ? pcts[mid] : (pcts[mid - 1] + pcts[mid]) / 2)
+      : null;
     charts.selection = new Chart(canvas, {
       type: "bar",
       data: {
@@ -202,18 +208,44 @@
             borderRadius: 4,
             barPercentage: 0.72,
           },
+          {
+            type: "line",
+            label: medianPct == null ? "медиана" : `медиана ${fmt1.format(medianPct)}%`,
+            data: days.map(() => medianPct),
+            borderColor: "#e2b45a",
+            borderDash: [6, 4],
+            pointRadius: 0,
+            borderWidth: 2,
+          },
         ],
       },
       options: {
         responsive: true,
         maintainAspectRatio: false,
         plugins: {
-          legend: { display: false },
+          legend: {
+            display: medianPct != null,
+            onClick: () => {},
+            labels: {
+              color: "#8aa396",
+              boxWidth: 12,
+              generateLabels: () => [
+                {
+                  text: `медиана ${fmt1.format(medianPct)}%`,
+                  fillStyle: "transparent",
+                  strokeStyle: "#e2b45a",
+                  lineWidth: 2,
+                  lineDash: [6, 4],
+                },
+              ],
+            },
+          },
           tooltip: {
             titleFont: { size: 14 },
             callbacks: {
               title: (items) => formatRu(days[items[0].dataIndex].date),
               label: (c) => {
+                if (c.dataset.type === "line") return `медиана ${fmt1.format(c.raw)}%`;
                 const d = days[c.dataIndex];
                 const pct = d.pct == null ? "—" : `${fmt1.format(d.pct)}%`;
                 return [
