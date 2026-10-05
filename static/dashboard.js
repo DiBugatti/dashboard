@@ -207,6 +207,7 @@
             backgroundColor: "#3dba7a",
             borderRadius: 4,
             barPercentage: 0.72,
+            order: 1,
           },
           {
             type: "line",
@@ -216,6 +217,7 @@
             borderDash: [6, 4],
             pointRadius: 0,
             borderWidth: 2,
+            order: 0,
           },
         ],
       },
@@ -242,17 +244,19 @@
           },
           tooltip: {
             titleFont: { size: 14 },
+            filter: (item) => item.dataset.type !== "line",
             callbacks: {
               title: (items) => formatRu(days[items[0].dataIndex].date),
               label: (c) => {
-                if (c.dataset.type === "line") return `медиана ${fmt1.format(c.raw)}%`;
                 const d = days[c.dataIndex];
                 const pct = d.pct == null ? "—" : `${fmt1.format(d.pct)}%`;
-                return [
+                const lines = [
                   `Приехало ${fmt1.format(d.arrived_kg / 1000)} т`,
                   `Отобрано ${fmt1.format(d.selected_kg / 1000)} т`,
                   `Процент отбора ${pct}`,
                 ];
+                if (medianPct != null) lines.push(`Медиана периода ${fmt1.format(medianPct)}%`);
+                return lines;
               },
             },
           },

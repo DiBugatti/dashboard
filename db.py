@@ -50,7 +50,8 @@ def fraction_color(name: str) -> str:
 def _cfg() -> dict[str, str]:
     return {
         "uat_server": os.getenv("SQL_SERVER_UAT", os.getenv("SQL_SERVER", "192.168.80.10")),
-        "buh_server": os.getenv("SQL_SERVER_BUH", "192.168.80.5"),
+        # БП и УАТ на одном SQL Server — продажи берутся одним кросс-БД запросом
+        "buh_server": os.getenv("SQL_SERVER_BUH", "192.168.80.10"),
         "uat_database": DB_UAT,
         "buh_database": DB_BUH,
         "user": os.getenv("SQL_USER", "user1c"),
@@ -106,37 +107,14 @@ def _bounds(date_from: date, date_to: date) -> tuple[str, str]:
     return date_from.isoformat(), date.fromordinal(date_to.toordinal() + 1).isoformat()
 
 
-def clean_buh_name(name: str) -> str:
-    s = name or ""
-    for pref in (
-        "Вторичные ресурсы,извлеченные при сортировке твердых коммунальных отходов",
-        "Вторичные ресурсы, извлеченные при сортировке твердых коммунальных отходов",
-        "Вторичные ресурсы, извлеченное при сортировке твердых коммунальных  отходов",
-    ):
-        s = s.replace(pref, "")
-    return s.replace("(", "").replace(")", "").strip()
-
-
 def _norm_match_key(name: str) -> str:
     """Нормализация для стыковки БП ↔ уатВидГруза (пробелы вокруг запятой)."""
-    s = (name or "").strip().lower()
+    s = (name or "").strip().lower().replace("ё", "е")
     while ", " in s:
         s = s.replace(", ", ",")
     while "  " in s:
         s = s.replace("  ", " ")
     return s
-
-
-# УАТ: номенклатура.уатВидГруза → справочник видов груза (_Reference10024)
-VID_GRUZA_QUERY = """
-SELECT
-  CONVERT(nvarchar(150), nu._Description) AS NomUat,
-  CONVERT(nvarchar(200), vg._Description) AS VidGruza
-FROM dbo._Reference82 AS nu
-INNER JOIN dbo._Reference10024 AS vg ON vg._IDRRef = nu._Fld15914RRef
-WHERE nu._Marked = 0x00
-  AND vg._Marked = 0x00
-"""
 
 
 SHIFTS_QUERY = """
@@ -231,82 +209,98 @@ def vesy_soft_axis_label(raw: str) -> str:
 WAREHOUSE_QUERY = """
 SELECT
   CONVERT(nvarchar(150), nom._Description) AS Nomenclature,
+  CONVERT(nvarchar(150), vg._Description) AS VidGruza,
   ISNULL(SUM(t._Fld18409), 0) AS Qty
 FROM dbo._Document18336 AS t
 INNER JOIN dbo._Enum18339 AS st ON st._IDRRef = t._Fld18367RRef AND st._EnumOrder = 1
 LEFT JOIN dbo._Reference82 AS nom ON nom._IDRRef = t._Fld18410RRef
+LEFT JOIN dbo._Reference10024 AS vg ON vg._IDRRef = nom._Fld15914RRef
 WHERE t._Marked = 0x00
-GROUP BY CONVERT(nvarchar(150), nom._Description)
+GROUP BY CONVERT(nvarchar(150), nom._Description), CONVERT(nvarchar(150), vg._Description)
 HAVING ISNULL(SUM(t._Fld18409), 0) > 0
 ORDER BY ISNULL(SUM(t._Fld18409), 0) DESC
 """
 
-SALES_PERIOD_QUERY = """
-SELECT
-  CONVERT(nvarchar(500), n._Description) AS NomFull,
-  CONVERT(nvarchar(200), k._Description) AS Contragent,
-  vt._Fld9752 AS Qty,
-  vt._Fld9753 AS Price,
-  vt._Fld9754 AS Amount
-FROM dbo._Document637 AS d
-INNER JOIN dbo._Document637_VT9746 AS vt ON vt._Document637_IDRRef = d._IDRRef
-LEFT JOIN dbo._Reference204 AS n ON n._IDRRef = vt._Fld9748RRef
-LEFT JOIN dbo._Reference177 AS k ON k._IDRRef = d._Fld9695RRef
-WHERE d._Marked = 0x00 AND d._Posted = 0x01
-  AND DATEADD(year, -2000, d._Date_Time) >= %s
-  AND DATEADD(year, -2000, d._Date_Time) <  %s
-"""
-
-SALES_12M_QUERY = """
-SELECT
-  CONVERT(varchar(7), DATEADD(year, -2000, d._Date_Time), 120) AS MonthKey,
-  CONVERT(nvarchar(500), n._Description) AS NomFull,
-  SUM(vt._Fld9752) AS Qty,
-  SUM(vt._Fld9754) AS Amount
-FROM dbo._Document637 AS d
-INNER JOIN dbo._Document637_VT9746 AS vt ON vt._Document637_IDRRef = d._IDRRef
-LEFT JOIN dbo._Reference204 AS n ON n._IDRRef = vt._Fld9748RRef
-WHERE d._Marked = 0x00 AND d._Posted = 0x01
-  AND DATEADD(year, -2000, d._Date_Time) >= %s
-  AND DATEADD(year, -2000, d._Date_Time) <  %s
-GROUP BY
-  CONVERT(varchar(7), DATEADD(year, -2000, d._Date_Time), 120),
-  CONVERT(nvarchar(500), n._Description)
-"""
-
-# Цена номенклатуры — из её последнего проведённого документа, не средняя за период.
-LAST_SALE_PRICE_QUERY = """
-WITH line AS (
+# Цены и выручка — один кросс-БД SELECT: реализации БП (msk_buh) + вид груза
+# и группа номенклатуры УАТ (msk_uat). Обе базы на одном SQL Server, поэтому
+# JOIN идёт напрямую, без linked server.
+#
+# Только ВМР: CROSS APPLY к видам груза номенклатуры из папки «ВМР» отсекает
+# строки без соответствия (провода, масла, щепа древесная).
+# Стыковка: очищенное имя номенклатуры БП = наименование вида груза УАТ;
+# ранг 1 — точное совпадение, ранг 2 — имя БП начинается с вида груза
+# («ПЭТ микс 4 цвета» → вид «ПЭТ микс»), берётся самое длинное совпадение.
+SALES_VMR_QUERY = """
+WITH VmrVid AS (
   SELECT
-    CONVERT(nvarchar(500), n._Description) AS NomFull,
-    d._IDRRef AS DocId,
-    CONVERT(varchar(19), DATEADD(year, -2000, d._Date_Time), 120) AS DocDate,
-    CONVERT(nvarchar(20), d._Number) AS DocNumber,
-    vt._Fld9752 AS Qty,
-    vt._Fld9754 AS Amount
-  FROM dbo._Document637 AS d
-  INNER JOIN dbo._Document637_VT9746 AS vt ON vt._Document637_IDRRef = d._IDRRef
-  LEFT JOIN dbo._Reference204 AS n ON n._IDRRef = vt._Fld9748RRef
-  WHERE d._Marked = 0x00 AND d._Posted = 0x01
-    AND ISNULL(vt._Fld9752, 0) > 0
+    VidKey = LOWER(LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(
+                 CONVERT(nvarchar(150), vg._Description),
+                 N'ё', N'е'), N', ', N','), N'  ', N' ')))),
+    VidGruza = MIN(CONVERT(nvarchar(150), vg._Description)),
+    NomGroup = MIN(CONVERT(nvarchar(100), grp._Description)),
+    NomUat   = MIN(CONVERT(nvarchar(150), nu._Description))
+  FROM {uat}.dbo._Reference82 AS nu
+  INNER JOIN {uat}.dbo._Reference82 AS grp
+    ON grp._IDRRef = nu._ParentIDRRef
+   AND grp._Folder = 0x00                     -- 0x00 = группа, 0x01 = элемент
+  INNER JOIN {uat}.dbo._Reference10024 AS vg
+    ON vg._IDRRef = nu._Fld15914RRef
+  WHERE nu._Folder = 0x01
+    AND nu._Marked = 0x00
+    AND vg._Marked = 0x00
+    AND CONVERT(nvarchar(100), grp._Description) = N'ВМР'
+  GROUP BY LOWER(LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(
+               CONVERT(nvarchar(150), vg._Description),
+               N'ё', N'е'), N', ', N','), N'  ', N' '))))
 ),
-per_doc AS (
+SalesBuh AS (
   SELECT
-    NomFull,
-    DocDate,
-    DocNumber,
-    SUM(Qty) AS Qty,
-    SUM(Amount) AS Amount,
-    ROW_NUMBER() OVER (
-      PARTITION BY NomFull
-      ORDER BY DocDate DESC, DocNumber DESC
-    ) AS rn
-  FROM line
-  GROUP BY NomFull, DocId, DocDate, DocNumber
+    DocDate    = CONVERT(varchar(10), DATEADD(year, -2000, d._Date_Time), 120),
+    DocNumber  = CONVERT(nvarchar(20), d._Number),
+    Contragent = CONVERT(nvarchar(200), k._Description),
+    NomBuh     = LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(
+                     CONVERT(nvarchar(500), n._Description),
+                     N'Вторичные ресурсы,извлеченные при сортировке твердых коммунальных отходов', N''),
+                     N'Вторичные ресурсы, извлеченные при сортировке твердых коммунальных отходов', N''),
+                     N'Вторичные ресурсы, извлеченное при сортировке твердых коммунальных  отходов', N''),
+                     N'(', N''), N')', N''))),
+    Qty        = vt._Fld9752,
+    Price      = vt._Fld9753,
+    Amount     = vt._Fld9754
+  FROM {buh}.dbo._Document637 AS d
+  INNER JOIN {buh}.dbo._Document637_VT9746 AS vt
+    ON vt._Document637_IDRRef = d._IDRRef
+  LEFT JOIN {buh}.dbo._Reference204 AS n
+    ON n._IDRRef = vt._Fld9748RRef
+  LEFT JOIN {buh}.dbo._Reference177 AS k
+    ON k._IDRRef = d._Fld9695RRef
+  WHERE d._Marked = 0x00
+    AND d._Posted = 0x01
+    AND DATEADD(year, -2000, d._Date_Time) >= %s
+    AND DATEADD(year, -2000, d._Date_Time) <  %s
 )
-SELECT NomFull, DocDate, DocNumber, Qty, Amount
-FROM per_doc
-WHERE rn = 1
+SELECT
+  s.DocDate,
+  s.DocNumber,
+  s.Contragent,
+  s.NomBuh,
+  v.VidGruza,
+  v.NomGroup,
+  v.NomUat,
+  s.Qty,
+  s.Price,
+  s.Amount
+FROM SalesBuh AS s
+CROSS APPLY (
+  SELECT TOP (1) x.VidGruza, x.NomGroup, x.NomUat
+  FROM VmrVid AS x
+  CROSS APPLY (SELECT MatchKey = LOWER(LTRIM(RTRIM(REPLACE(REPLACE(REPLACE(
+                   s.NomBuh, N'ё', N'е'), N', ', N','), N'  ', N' '))))) AS m
+  WHERE m.MatchKey = x.VidKey
+     OR m.MatchKey LIKE x.VidKey + N' %%'
+  ORDER BY CASE WHEN m.MatchKey = x.VidKey THEN 0 ELSE 1 END, LEN(x.VidKey) DESC
+) AS v
+ORDER BY s.DocDate, s.DocNumber, v.VidGruza
 """
 
 
@@ -405,55 +399,39 @@ def fetch_warehouse() -> list[dict[str, Any]]:
     return [
         {
             "nomenclature": (r.get("Nomenclature") or "").strip() or "—",
+            "vid_gruza": (r.get("VidGruza") or "").strip(),
             "quantity": _f(r.get("Qty")),
         }
         for r in rows
     ]
 
 
-def fetch_vid_gruza_map() -> list[dict[str, str]]:
-    """Пары УАТ: номенклатура ↔ уатВидГруза (для стыковки с номенклатурой БП)."""
-    with connect(DB_UAT) as conn:
-        cur = conn.cursor(as_dict=True)
-        cur.execute(VID_GRUZA_QUERY)
-        rows = cur.fetchall() or []
-    out: list[dict[str, str]] = []
-    for r in rows:
-        nom = (r.get("NomUat") or "").strip()
-        vid = (r.get("VidGruza") or "").strip()
-        if nom and vid:
-            out.append({"nom_uat": nom, "vid_gruza": vid})
-    return out
-
-
-def _vid_gruza_indexes(
-    pairs: list[dict[str, str]],
-) -> tuple[dict[str, str], dict[str, str]]:
-    """norm(vid_gruza)→nom_uat и norm(nom_uat)→vid_gruza."""
-    by_vid: dict[str, str] = {}
-    by_uat: dict[str, str] = {}
-    for p in pairs:
-        vk = _norm_match_key(p["vid_gruza"])
-        uk = _norm_match_key(p["nom_uat"])
-        by_vid.setdefault(vk, p["nom_uat"])
-        by_uat.setdefault(uk, p["vid_gruza"])
-    return by_vid, by_uat
-
-
 def fetch_sales(date_from: date, date_to: date) -> list[dict[str, Any]]:
+    """Продажи ВМР за период: номенклатура БП + вид груза и номенклатура УАТ."""
+    cfg = _cfg()
+    if cfg["uat_server"] != cfg["buh_server"]:
+        raise RuntimeError(
+            "Продажи читаются одним кросс-БД запросом: SQL_SERVER_UAT и SQL_SERVER_BUH "
+            f"должны указывать на один сервер (сейчас {cfg['uat_server']} и {cfg['buh_server']})"
+        )
     d0, d1 = _bounds(date_from, date_to)
+    sql = SALES_VMR_QUERY.format(uat=cfg["uat_database"], buh=cfg["buh_database"])
     with connect(DB_BUH) as conn:
         cur = conn.cursor(as_dict=True)
-        cur.execute(SALES_PERIOD_QUERY, (d0, d1))
+        cur.execute(sql, (d0, d1))
         rows = cur.fetchall() or []
     out = []
     for r in rows:
-        full = (r.get("NomFull") or "").strip()
-        key = clean_buh_name(full)
+        vid = (r.get("VidGruza") or "").strip()
         out.append(
             {
-                "fraction": key or full or "—",
+                "date": _serialize(r.get("DocDate")),
+                "number": (r.get("DocNumber") or "").strip(),
                 "contragent": (r.get("Contragent") or "").strip() or "—",
+                "fraction": (r.get("NomBuh") or "").strip() or "—",
+                "vid_gruza": vid,
+                "nom_group": (r.get("NomGroup") or "").strip(),
+                "name": (r.get("NomUat") or "").strip() or vid or "—",
                 "quantity": _f(r.get("Qty")),
                 "price": _f(r.get("Price")),
                 "amount": _f(r.get("Amount")),
@@ -462,50 +440,49 @@ def fetch_sales(date_from: date, date_to: date) -> list[dict[str, Any]]:
     return out
 
 
-def fetch_sales_monthly(months: int = 12) -> list[dict[str, Any]]:
+def sales_year_window(months: int = 12) -> tuple[date, date]:
     today = date.today()
     start = date(today.year, today.month, 1) - timedelta(days=months * 31)
-    start = date(start.year, start.month, 1)
-    end = date.fromordinal(today.toordinal() + 1)
-    with connect(DB_BUH) as conn:
-        cur = conn.cursor(as_dict=True)
-        cur.execute(SALES_12M_QUERY, (start.isoformat(), end.isoformat()))
-        rows = cur.fetchall() or []
-    out = []
-    for r in rows:
-        full = (r.get("NomFull") or "").strip()
-        out.append(
-            {
-                "month": _serialize(r.get("MonthKey")),
-                "fraction": clean_buh_name(full) or full or "—",
-                "quantity": _f(r.get("Qty")),
-                "amount": _f(r.get("Amount")),
-            }
-        )
-    return out
+    return date(start.year, start.month, 1), today
 
 
-def fetch_last_sale_prices() -> dict[str, float]:
-    """₽/т по очищенному имени БП: сумма ÷ количество в последнем проведённом документе."""
-    with connect(DB_BUH) as conn:
-        cur = conn.cursor(as_dict=True)
-        cur.execute(LAST_SALE_PRICE_QUERY)
-        rows = cur.fetchall() or []
-    best: dict[str, tuple[str, float]] = {}
+def _monthly_from_sales(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Помесячно по номенклатуре УАТ: тонны и рубли."""
+    agg: dict[tuple[str, str], list[float]] = {}
     for r in rows:
-        full = (r.get("NomFull") or "").strip()
-        key = _norm_match_key(clean_buh_name(full) or full)
-        if not key:
+        month = (r.get("date") or "")[:7]
+        if not month:
             continue
-        qty = _f(r.get("Qty"))
-        if qty <= 0:
+        a = agg.setdefault((month, r["name"]), [0.0, 0.0])
+        a[0] += r["quantity"]
+        a[1] += r["amount"]
+    return [
+        {"month": m, "name": n, "quantity": q, "amount": s}
+        for (m, n), (q, s) in sorted(agg.items())
+    ]
+
+
+def _last_prices_from_sales(rows: list[dict[str, Any]]) -> dict[str, float]:
+    """₽/т из последнего документа позиции; ключи — вид груза и номенклатура УАТ."""
+    best: dict[str, tuple[tuple[str, str], float, float]] = {}
+    for r in rows:
+        if r["quantity"] <= 0:
             continue
-        stamp = _serialize(r.get("DocDate")) or ""
-        price = _f(r.get("Amount")) / qty
-        prev = best.get(key)
+        stamp = (r.get("date") or "", r.get("number") or "")
+        prev = best.get(r["name"])
         if prev is None or stamp > prev[0]:
-            best[key] = (stamp, price)
-    return {k: v[1] for k, v in best.items()}
+            best[r["name"]] = (stamp, r["amount"], r["quantity"])
+        elif stamp == prev[0]:
+            best[r["name"]] = (stamp, prev[1] + r["amount"], prev[2] + r["quantity"])
+    prices: dict[str, float] = {}
+    for name, (_, amount, qty) in best.items():
+        prices[_norm_match_key(name)] = amount / qty
+    for r in rows:
+        price = prices.get(_norm_match_key(r["name"]))
+        if price is not None:
+            prices.setdefault(_norm_match_key(r["vid_gruza"]), price)
+            prices.setdefault(_norm_match_key(r["fraction"]), price)
+    return prices
 
 
 def _build_production(shifts: list[dict[str, Any]]) -> dict[str, Any]:
@@ -695,27 +672,15 @@ def _build_shrinkage(ship_rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _prices_by_uat_name(
-    prices_buh: dict[str, float],
-    by_uat: dict[str, str],
-) -> dict[str, float]:
-    """Цены БП, доступные по имени номенклатуры УАТ через уатВидГруза."""
-    out = dict(prices_buh)
-    for uat_key, vid in by_uat.items():
-        price = prices_buh.get(_norm_match_key(vid))
-        if price is not None:
-            out[uat_key] = price
-            out[(vid or "").strip().lower()] = price
-    return out
-
-
 def _build_warehouse(wh: list[dict[str, Any]], prices: dict[str, float]) -> dict[str, Any]:
     total = sum(x["quantity"] for x in wh) or 1.0
     rows = []
     total_rub = 0.0
     for x in wh:
-        key = _norm_match_key(x["nomenclature"])
-        price = prices.get(key, prices.get(x["nomenclature"].lower(), 0.0))
+        # цена известна по имени номенклатуры УАТ либо по её виду груза
+        price = prices.get(_norm_match_key(x["nomenclature"]))
+        if price is None:
+            price = prices.get(_norm_match_key(x.get("vid_gruza") or ""), 0.0)
         # цена в БП за тонну, остаток в кг
         rub = x["quantity"] / 1000.0 * price
         total_rub += rub
@@ -737,22 +702,11 @@ def _build_warehouse(wh: list[dict[str, Any]], prices: dict[str, float]) -> dict
     }
 
 
-def _sale_uat_name(fraction: str, by_vid: dict[str, str]) -> str:
-    """Имя для продаж: номенклатура УАТ через уатВидГруза, иначе очищенное имя БП."""
-    key = _norm_match_key(fraction)
-    return by_vid.get(key) or fraction
-
-
-def _build_sales(
-    sales: list[dict[str, Any]],
-    by_vid: dict[str, str] | None = None,
-) -> dict[str, Any]:
-    by_vid = by_vid or {}
+def _build_sales(sales: list[dict[str, Any]]) -> dict[str, Any]:
     by_frac: dict[str, dict[str, float]] = {}
     by_buyer: dict[str, float] = {}
     for r in sales:
-        name = _sale_uat_name(r["fraction"], by_vid)
-        f = by_frac.setdefault(name, {"tons": 0.0, "rub": 0.0})
+        f = by_frac.setdefault(r["name"], {"tons": 0.0, "rub": 0.0})
         f["tons"] += r["quantity"]
         f["rub"] += r["amount"]
         by_buyer[r["contragent"]] = by_buyer.get(r["contragent"], 0.0) + r["amount"]
@@ -794,15 +748,9 @@ def _build_sales(
 def _build_prices(
     monthly: list[dict[str, Any]],
     sales: list[dict[str, Any]] | None = None,
-    by_vid: dict[str, str] | None = None,
 ) -> dict[str, Any]:
-    # ряды — по фракциям из продаж периода; имя — номенклатура УАТ через уатВидГруза
-    by_vid = by_vid or {}
-    sales_names: dict[str, str] = {}
-    for r in sales or []:
-        fr = (r.get("fraction") or "").strip()
-        if fr and fr != "—":
-            sales_names.setdefault(_norm_match_key(fr), fr)
+    # ряды — только по позициям, которые продавались в выбранном периоде
+    sales_names = {r["name"] for r in sales or []}
 
     months = sorted({m["month"] for m in monthly if m["month"]})
     if len(months) > 12:
@@ -811,15 +759,10 @@ def _build_prices(
     for r in monthly:
         if r["month"] not in months:
             continue
-        fr = (r.get("fraction") or "").strip()
-        if not fr:
+        name = (r.get("name") or "").strip()
+        if not name or (sales_names and name not in sales_names):
             continue
-        fr_key = _norm_match_key(fr)
-        if sales_names and fr_key not in sales_names:
-            continue
-        # БП NomKey = уатВидГруза → показываем номенклатуру УАТ
-        display = by_vid.get(fr_key) or sales_names.get(fr_key, fr)
-        bucket = data.setdefault(display, {})
+        bucket = data.setdefault(name, {})
         prev = bucket.get(r["month"], [0.0, 0.0])
         bucket[r["month"]] = [prev[0] + r["amount"], prev[1] + r["quantity"]]
 
@@ -859,8 +802,6 @@ def build_dashboard(
     ships = fetch_shipments(date_from, date_to)
     selection = fetch_selection(date_from, date_to)
     warehouse = fetch_warehouse()
-    vid_pairs = fetch_vid_gruza_map()
-    by_vid, by_uat = _vid_gruza_indexes(vid_pairs)
 
     sales: list[dict[str, Any]] = []
     monthly: list[dict[str, Any]] = []
@@ -868,19 +809,19 @@ def build_dashboard(
     sales_error = None
     try:
         sales = fetch_sales(date_from, date_to)
-        monthly = fetch_sales_monthly(12)
-        last_prices = fetch_last_sale_prices()
+        year_rows = fetch_sales(*sales_year_window(12))
+        monthly = _monthly_from_sales(year_rows)
+        last_prices = _last_prices_from_sales(year_rows)
     except Exception as exc:  # noqa: BLE001
         sales_error = str(exc)
 
     production = _build_production(shifts)
     shipped = shipment_scale_totals(ships)
     shrinkage = _build_shrinkage(ships)
-    prices_map = _prices_by_uat_name(last_prices, by_uat)
 
-    wh = _build_warehouse(warehouse, prices_map)
-    sales_block = _build_sales(sales, by_vid)
-    prices_block = _build_prices(monthly, sales, by_vid)
+    wh = _build_warehouse(warehouse, last_prices)
+    sales_block = _build_sales(sales)
+    prices_block = _build_prices(monthly, sales)
 
     # KPI плитки по ТЗ
     prod_kg = production["total_kg"]
