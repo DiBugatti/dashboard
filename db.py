@@ -19,32 +19,39 @@ DB_BUH = os.getenv("SQL_DATABASE_BUH", "msk_buh")
 
 # цвета фракций — постоянные во всех блоках (п. 9 ТЗ)
 FRACTION_COLORS = {
-    "ПЭТ бело-голубой": "#3dba7a",
-    "ПЭТ Коричнево-зелёный МИКС": "#2a8f5c",
-    "ПЭТ микс 4 цвета": "#2a8f5c",
-    "ПЭТ микс": "#5bb8d4",
-    "ПЭТ матовый (белый)": "#8ec5a8",
-    "ПЭТ молочный,маслянный": "#8ec5a8",
-    "Картон": "#e2b45a",
-    "картон": "#e2b45a",
-    "Банка алюминиевая": "#c9886a",
-    "алюминиевая банка": "#c9886a",
-    "Стекло": "#7a8fa3",
-    "стеклобой микс": "#7a8fa3",
-    "Химия": "#9b7edc",
-    "флакон": "#9b7edc",
-    "Канистра": "#d47a9b",
-    "ПНД Канистра": "#d47a9b",
+    "ПЭТ Коричнево-зелёный МИКС": "#5082e6",
+    "ПЭТ микс 4 цвета": "#5082e6",
+    "ПЭТ бело-голубой": "#fabe00",
+    "ПЭТ микс": "#d946ef",
+    "ПЭТ матовый (белый)": "#8b5cf6",
+    "ПЭТ масляный (белый)": "#f08a24",
+    "ПЭТ молочный,маслянный": "#f08a24",
+    "Картон": "#22a06b",
+    "Банка алюминиевая": "#e62d32",
+    "алюминиевая банка": "#e62d32",
+    "Стекло": "#a16207",
+    "стеклобой микс": "#a16207",
+    "Химия": "#5ad2ff",
+    "флакон": "#5ad2ff",
+    "Канистра": "#2c3d66",
+    "ПНД Канистра": "#2c3d66",
+    "Макулатура": "#94a3b8",
+    "Металл": "#65a30d",
+    "Перо": "#0ea5e9",
 }
+DEFAULT_FRACTION_COLOR = "#7c8aa0"
+
+
+def _norm_name(name: str) -> str:
+    # В 1С встречаются двойные и неразрывные пробелы: «ПЭТ Коричнево-зелёный  МИКС»
+    return " ".join((name or "").split()).lower()
+
+
+_COLORS_BY_NORM = {_norm_name(k): v for k, v in FRACTION_COLORS.items()}
 
 
 def fraction_color(name: str) -> str:
-    if name in FRACTION_COLORS:
-        return FRACTION_COLORS[name]
-    for k, v in FRACTION_COLORS.items():
-        if k.lower() == (name or "").lower():
-            return v
-    return "#6a8f7c"
+    return _COLORS_BY_NORM.get(_norm_name(name), DEFAULT_FRACTION_COLOR)
 
 
 def _cfg() -> dict[str, str]:
@@ -505,7 +512,7 @@ def _build_production(shifts: list[dict[str, Any]]) -> dict[str, Any]:
         datasets.append(
             {
                 "name": brig,
-                "color": "#3dba7a" if "БА" in brig else "#e2b45a",
+                "color": "#5082e6" if "БА" in brig else "#5ad2ff",
                 "values": [round(by_day_brigade[d].get(brig, 0.0), 3) for d in days],
             }
         )
